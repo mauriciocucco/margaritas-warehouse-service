@@ -4,7 +4,6 @@ import { InventoryEntity } from './entities/inventory.entity';
 import { Repository } from 'typeorm';
 import {
   Ctx,
-  EventPattern,
   MessagePattern,
   Payload,
   RmqContext,
@@ -37,7 +36,7 @@ export class WarehouseService {
     }
   }
 
-  @EventPattern('request_ingredients')
+  @MessagePattern('request_ingredients')
   async handleRequestIngredients(
     @Payload() ingredientsRequested: { [key: string]: number },
     @Ctx() context: RmqContext,
