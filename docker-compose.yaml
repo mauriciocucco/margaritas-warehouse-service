@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  warehouse_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '3007:3007'
+    env_file:
+      - .env.development
+    depends_on:
+      - warehouse_database
+
+  warehouse_database:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: warehouse_db
+      POSTGRES_USER: maurisc
+      POSTGRES_PASSWORD: alegra_challenge
+    ports:
+      - '5434:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

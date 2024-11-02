@@ -1,13 +1,13 @@
-import { Entity, PrimaryColumn, Column } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
 
 @Entity('inventory')
 export class InventoryEntity {
-  @PrimaryColumn()
-  ingredient: string;
+  @PrimaryGeneratedColumn()
+  id: string;
 
   @Column({ unique: true })
   name: string;
 
-  @Column('int')
+  @Column({ default: 5 })
   quantity: number;
 }

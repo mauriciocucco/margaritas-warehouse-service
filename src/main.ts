@@ -5,6 +5,11 @@ import { ConfigService } from '@nestjs/config';
 
 async function bootstrap() {
   const configService = new ConfigService();
+  console.log(
+    'PUERTOOO',
+    configService.get<string>('DB_PORT'),
+    process.env.DB_PORT,
+  );
   const app = await NestFactory.createMicroservice<MicroserviceOptions>(
     AppModule,
     {
