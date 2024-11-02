@@ -2,14 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InventoryEntity } from './entities/inventory.entity';
 import { Repository } from 'typeorm';
-import {
-  Ctx,
-  MessagePattern,
-  Payload,
-  RmqContext,
-} from '@nestjs/microservices';
+import { RmqContext } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class WarehouseService {
@@ -17,91 +13,98 @@ export class WarehouseService {
     @InjectRepository(InventoryEntity)
     private readonly inventoryRepository: Repository<InventoryEntity>,
     private readonly httpService: HttpService,
+    private readonly configService: ConfigService,
   ) {}
 
-  @MessagePattern('reduce_ingredients')
-  async reduceIngredients(
-    @Payload() ingredients: { ingredient: string; quantity: number }[],
-  ) {
+  async reduceIngredients(ingredients: { [ingredientName: string]: number }) {
     try {
-      for (const item of ingredients) {
-        await this.updateInventory(item.ingredient, -item.quantity);
+      console.log('Reducing ingredients:', ingredients);
+
+      for (const [ingredient, quantity] of Object.entries(ingredients)) {
+        await this.updateInventory(ingredient, -quantity);
       }
 
       console.log('Ingredients reduced successfully.');
+
+      return { success: true };
     } catch (error) {
       console.error('Failed to reduce ingredients:', error.message);
 
-      throw error;
+      return { success: false };
     }
   }
 
-  @MessagePattern('request_ingredients')
   async handleRequestIngredients(
-    @Payload() ingredientsRequested: { [key: string]: number },
-    @Ctx() context: RmqContext,
+    ingredientsRequested: { [key: string]: number },
+    context: RmqContext,
   ) {
     console.log(
       'Warehouse received request for ingredients:',
       ingredientsRequested,
     );
 
-    const channel = context.getChannelRef();
-    const originalMsg = context.getMessage();
-    const missingIngredients = [];
+    try {
+      const channel = context.getChannelRef();
+      const originalMsg = context.getMessage();
+      const missingIngredients = [];
 
-    for (const [ingredient, quantityNeeded] of Object.entries(
-      ingredientsRequested,
-    )) {
-      const item = await this.inventoryRepository.findOne({
-        where: { name: ingredient },
-      });
-
-      if (!item || item.quantity < quantityNeeded) {
-        missingIngredients.push({
-          ingredient,
-          quantityNeeded: quantityNeeded - (item?.quantity || 0),
+      for (const [ingredient, quantityNeeded] of Object.entries(
+        ingredientsRequested,
+      )) {
+        const item = await this.inventoryRepository.findOne({
+          where: { name: ingredient },
         });
+
+        if (!item || item.quantity < quantityNeeded) {
+          missingIngredients.push({
+            ingredient,
+            quantityNeeded: quantityNeeded - (item?.quantity || 0),
+          });
+        }
       }
-    }
 
-    if (missingIngredients.length > 0) {
-      console.log('Missing ingredients:', missingIngredients);
+      if (missingIngredients.length > 0) {
+        console.log('Missing ingredients:', missingIngredients);
 
-      for (const missing of missingIngredients) {
-        const { ingredient, quantityNeeded } = missing;
-        let totalPurchased = 0;
+        for (const missing of missingIngredients) {
+          const { ingredient, quantityNeeded } = missing;
+          let totalPurchased = 0;
 
-        while (totalPurchased < quantityNeeded) {
-          try {
-            const quantityPurchased = await this.buyIngredient(ingredient);
+          while (totalPurchased < quantityNeeded) {
+            try {
+              const quantityPurchased = await this.buyIngredient(ingredient);
 
-            if (quantityPurchased > 0) {
-              await this.updateInventory(ingredient, quantityPurchased);
+              if (quantityPurchased > 0) {
+                await this.updateInventory(ingredient, quantityPurchased);
 
-              totalPurchased += quantityPurchased;
-            } else {
-              console.log(
-                `Ingredient ${ingredient} not available at the Market Square. Waiting for...`,
+                totalPurchased += quantityPurchased;
+              } else {
+                console.log(
+                  `Ingredient ${ingredient} not available at the Market Square. Waiting for...`,
+                );
+
+                await this.delay(5000);
+              }
+            } catch (error) {
+              console.error(
+                `Error when purchasing ${ingredient}:`,
+                error.message,
               );
 
               await this.delay(5000);
             }
-          } catch (error) {
-            console.error(
-              `Error when purchasing ${ingredient}:`,
-              error.message,
-            );
-
-            await this.delay(5000);
           }
         }
       }
+
+      channel.ack(originalMsg);
+
+      return { success: true };
+    } catch (error) {
+      console.error('Error processing ingredient request:', error.message);
+
+      throw error;
     }
-
-    channel.ack(originalMsg);
-
-    return { success: true };
   }
 
   async buyIngredient(ingredient: string): Promise<number> {
@@ -109,10 +112,11 @@ export class WarehouseService {
 
     try {
       const response = await firstValueFrom(
-        this.httpService.post(
-          'https://recruitment.alegra.com/api/farmers-market/buy',
-          null,
-          { params: { ingredient } },
+        this.httpService.get(
+          this.configService.get('FARMERS_MARKET_URL') + '/buy',
+          {
+            params: { ingredient },
+          },
         ),
       );
       const { quantitySold } = response.data;
@@ -142,12 +146,14 @@ export class WarehouseService {
     await this.inventoryRepository
       .createQueryBuilder()
       .update()
-      .set({ quantity: () => `quantity + ${quantityChange}` });
+      .set({ quantity: () => `quantity + ${quantityChange}` })
+      .where('name = :name', { name: ingredient })
+      .execute();
 
     console.log(`Updated inventory: ${ingredient} - ${quantityChange} units.`);
   }
 
-  delay(milliseconds: number) {
+  private delay(milliseconds: number) {
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 }

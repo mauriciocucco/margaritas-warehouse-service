@@ -5,11 +5,6 @@ import { ConfigService } from '@nestjs/config';
 
 async function bootstrap() {
   const configService = new ConfigService();
-  console.log(
-    'PUERTOOO',
-    configService.get<string>('DB_PORT'),
-    process.env.DB_PORT,
-  );
   const app = await NestFactory.createMicroservice<MicroserviceOptions>(
     AppModule,
     {
@@ -17,6 +12,7 @@ async function bootstrap() {
       options: {
         urls: [configService.get<string>('RABBITMQ_URL')],
         queue: 'warehouse_queue',
+        noAck: false,
         queueOptions: {
           durable: false,
         },
