@@ -11,6 +11,8 @@ services:
       - .env.development
     depends_on:
       - warehouse_database
+    networks:
+      - external_network
 
   warehouse_database:
     image: postgres:14
@@ -22,6 +24,12 @@ services:
       - '5434:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - external_network
+
+networks:
+  external_network:
+    external: true
 
 volumes:
   postgres_data:

@@ -5,12 +5,13 @@ import { WarehouseService } from './warehouse.service';
 import { HttpModule } from '@nestjs/axios';
 import { ConfigModule } from '@nestjs/config';
 import { WarehouseController } from './warehouse.controller';
+import { PurchaseHistory } from './entities/purchase-history.entity';
 
 @Module({
   imports: [
     HttpModule,
     ConfigModule,
-    TypeOrmModule.forFeature([InventoryEntity]),
+    TypeOrmModule.forFeature([InventoryEntity, PurchaseHistory]),
   ],
   controllers: [WarehouseController],
   providers: [WarehouseService],

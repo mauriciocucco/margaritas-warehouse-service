@@ -6,18 +6,38 @@ import { RmqContext } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
+import { PurchaseHistory } from './entities/purchase-history.entity';
 
 @Injectable()
 export class WarehouseService {
   constructor(
     @InjectRepository(InventoryEntity)
     private readonly inventoryRepository: Repository<InventoryEntity>,
+    @InjectRepository(PurchaseHistory)
+    private readonly purchaseHistoryRepository: Repository<PurchaseHistory>,
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {}
 
-  async reduceIngredients(ingredients: { [ingredientName: string]: number }) {
+  async getInventory(): Promise<InventoryEntity[]> {
+    return await this.inventoryRepository
+      .createQueryBuilder('inventory')
+      .orderBy('inventory.name', 'ASC')
+      .getMany();
+  }
+
+  async getPurchaseHistory(): Promise<PurchaseHistory[]> {
+    return this.purchaseHistoryRepository.find({ order: { date: 'DESC' } });
+  }
+
+  async reduceIngredients(
+    ingredients: { [ingredientName: string]: number },
+    context: RmqContext,
+  ) {
     try {
+      const channel = context.getChannelRef();
+      const originalMsg = context.getMessage();
+
       console.log('Reducing ingredients:', ingredients);
 
       for (const [ingredient, quantity] of Object.entries(ingredients)) {
@@ -25,6 +45,8 @@ export class WarehouseService {
       }
 
       console.log('Ingredients reduced successfully.');
+
+      channel.ack(originalMsg);
 
       return { success: true };
     } catch (error) {
@@ -74,7 +96,7 @@ export class WarehouseService {
             try {
               const quantityPurchased = await this.buyIngredient(ingredient);
 
-              if (quantityPurchased > 0) {
+              if (quantityPurchased >= quantityNeeded) {
                 await this.updateInventory(ingredient, quantityPurchased);
 
                 totalPurchased += quantityPurchased;
@@ -143,14 +165,41 @@ export class WarehouseService {
   }
 
   async updateInventory(ingredient: string, quantityChange: number) {
-    await this.inventoryRepository
-      .createQueryBuilder()
-      .update()
-      .set({ quantity: () => `quantity + ${quantityChange}` })
-      .where('name = :name', { name: ingredient })
-      .execute();
+    try {
+      await this.inventoryRepository
+        .createQueryBuilder()
+        .update()
+        .set({ quantity: () => `quantity + ${quantityChange}` })
+        .where('name = :name', { name: ingredient })
+        .execute();
 
-    console.log(`Updated inventory: ${ingredient} - ${quantityChange} units.`);
+      if (quantityChange > 0) {
+        await this.purchaseHistoryRepository
+          .createQueryBuilder()
+          .insert()
+          .into('purchase_history')
+          .values({
+            ingredient,
+            quantity: quantityChange,
+            date: new Date(),
+          })
+          .execute();
+
+        console.log(
+          `Registered purchase: ${ingredient} - ${quantityChange} units.`,
+        );
+      }
+
+      console.log(
+        `Updated inventory: ${ingredient} - ${quantityChange} units.`,
+      );
+    } catch (error) {
+      console.error(
+        `Failed to update inventory or register purchase: ${error.message}`,
+      );
+
+      throw error;
+    }
   }
 
   private delay(milliseconds: number) {
