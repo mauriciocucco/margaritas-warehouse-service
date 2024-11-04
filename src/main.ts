@@ -30,8 +30,9 @@ async function bootstrap() {
       queue: 'warehouse_queue',
       noAck: false,
       queueOptions: {
-        durable: false,
+        durable: true,
       },
+      prefetchCount: 1,
     },
   });
 

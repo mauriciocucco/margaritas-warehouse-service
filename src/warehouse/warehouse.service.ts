@@ -1,12 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InventoryEntity } from './entities/inventory.entity';
 import { Repository } from 'typeorm';
-import { RmqContext } from '@nestjs/microservices';
+import { ClientProxy, RmqContext } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { PurchaseHistory } from './entities/purchase-history.entity';
+import { OrderDto } from './dtos/order.dto';
+import { OrderStatus } from './enums/order-status.enum';
+import { GetPurchaseHistoryDto } from './dtos/get-purchase-history.dto';
+import { Events } from './enums/events.enum';
 
 @Injectable()
 export class WarehouseService {
@@ -17,7 +21,10 @@ export class WarehouseService {
     private readonly purchaseHistoryRepository: Repository<PurchaseHistory>,
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
-  ) {}
+    @Inject('MANAGER_SERVICE') private readonly managerClient: ClientProxy,
+  ) {
+    this.managerClient.connect();
+  }
 
   async getInventory(): Promise<InventoryEntity[]> {
     return await this.inventoryRepository
@@ -26,18 +33,36 @@ export class WarehouseService {
       .getMany();
   }
 
-  async getPurchaseHistory(): Promise<PurchaseHistory[]> {
-    return this.purchaseHistoryRepository.find({ order: { date: 'DESC' } });
+  async getPurchaseHistory(getPurchaseHistoryDto?: GetPurchaseHistoryDto) {
+    const { page, limit } = getPurchaseHistoryDto;
+    const skip = (page - 1) * limit;
+    const query =
+      this.purchaseHistoryRepository.createQueryBuilder('purchase_history');
+
+    if (getPurchaseHistoryDto.ingredient) {
+      query.where('purchase_history.ingredient = :ingredient', {
+        ingredient: getPurchaseHistoryDto.ingredient,
+      });
+    }
+
+    const [data, total] = await query
+      .orderBy('purchase_history.date', 'DESC')
+      .take(limit)
+      .skip(skip)
+      .getManyAndCount();
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data,
+      page,
+      limit,
+      totalPages,
+      totalItems: total,
+    };
   }
 
-  async reduceIngredients(
-    ingredients: { [ingredientName: string]: number },
-    context: RmqContext,
-  ) {
+  async reduceIngredients(ingredients: { [ingredientName: string]: number }) {
     try {
-      const channel = context.getChannelRef();
-      const originalMsg = context.getMessage();
-
       console.log('Reducing ingredients:', ingredients);
 
       for (const [ingredient, quantity] of Object.entries(ingredients)) {
@@ -45,8 +70,6 @@ export class WarehouseService {
       }
 
       console.log('Ingredients reduced successfully.');
-
-      channel.ack(originalMsg);
 
       return { success: true };
     } catch (error) {
@@ -57,67 +80,37 @@ export class WarehouseService {
   }
 
   async handleRequestIngredients(
-    ingredientsRequested: { [key: string]: number },
+    ingredientsRequest: {
+      ingredients: { [key: string]: number };
+      order: OrderDto;
+    },
     context: RmqContext,
   ) {
-    console.log(
-      'Warehouse received request for ingredients:',
-      ingredientsRequested,
-    );
+    const { ingredients, order } = ingredientsRequest;
+    const channel = context.getChannelRef();
+    const originalMsg = context.getMessage();
 
     try {
-      const channel = context.getChannelRef();
-      const originalMsg = context.getMessage();
-      const missingIngredients = [];
+      console.log(
+        'Warehouse received request for ingredients:',
+        ingredientsRequest,
+      );
 
-      for (const [ingredient, quantityNeeded] of Object.entries(
-        ingredientsRequested,
-      )) {
-        const item = await this.inventoryRepository.findOne({
-          where: { name: ingredient },
-        });
+      const missingIngredients = await this.getMissingIngredients(ingredients);
 
-        if (!item || item.quantity < quantityNeeded) {
-          missingIngredients.push({
-            ingredient,
-            quantityNeeded: quantityNeeded - (item?.quantity || 0),
-          });
-        }
+      if (!missingIngredients.length) {
+        await this.reduceIngredients(ingredients);
       }
 
       if (missingIngredients.length > 0) {
         console.log('Missing ingredients:', missingIngredients);
 
-        for (const missing of missingIngredients) {
-          const { ingredient, quantityNeeded } = missing;
-          let totalPurchased = 0;
+        this.updateOrderStatus(order, OrderStatus.PAUSED);
 
-          while (totalPurchased < quantityNeeded) {
-            try {
-              const quantityPurchased = await this.buyIngredient(ingredient);
-
-              if (quantityPurchased >= quantityNeeded) {
-                await this.updateInventory(ingredient, quantityPurchased);
-
-                totalPurchased += quantityPurchased;
-              } else {
-                console.log(
-                  `Ingredient ${ingredient} not available at the Market Square. Waiting for...`,
-                );
-
-                await this.delay(5000);
-              }
-            } catch (error) {
-              console.error(
-                `Error when purchasing ${ingredient}:`,
-                error.message,
-              );
-
-              await this.delay(5000);
-            }
-          }
-        }
+        await this.purchaseMissingIngredients(missingIngredients);
       }
+
+      this.updateOrderStatus(order, OrderStatus.IN_PROGRESS);
 
       channel.ack(originalMsg);
 
@@ -125,8 +118,72 @@ export class WarehouseService {
     } catch (error) {
       console.error('Error processing ingredient request:', error.message);
 
+      channel.nack(originalMsg);
       throw error;
     }
+  }
+
+  private async getMissingIngredients(ingredients: {
+    [key: string]: number;
+  }): Promise<{ ingredient: string; quantityNeeded: number }[]> {
+    const missingIngredients = [];
+
+    for (const [ingredient, quantityNeeded] of Object.entries(ingredients)) {
+      const item = await this.inventoryRepository.findOne({
+        where: { name: ingredient },
+      });
+      const availableQuantity = item?.quantity || 0;
+
+      if (availableQuantity < quantityNeeded) {
+        missingIngredients.push({
+          ingredient,
+          quantityNeeded: quantityNeeded - availableQuantity,
+        });
+      }
+    }
+
+    return missingIngredients;
+  }
+
+  private async purchaseMissingIngredients(
+    missingIngredients: { ingredient: string; quantityNeeded: number }[],
+  ): Promise<void> {
+    for (const { ingredient, quantityNeeded } of missingIngredients) {
+      let totalPurchased = 0;
+
+      while (totalPurchased < quantityNeeded) {
+        try {
+          const quantityPurchased = await this.buyIngredient(ingredient);
+
+          if (quantityPurchased > 0) {
+            totalPurchased += quantityPurchased;
+          } else {
+            console.log(
+              `Ingredient ${ingredient} not available at the market. Waiting...`,
+            );
+
+            await this.delay(5000);
+          }
+        } catch (error) {
+          console.error(`Error purchasing ${ingredient}:`, error.message);
+
+          throw error;
+        }
+      }
+
+      const extraQuantity = totalPurchased - quantityNeeded;
+
+      if (extraQuantity > 0) {
+        await this.updateInventory(ingredient, extraQuantity);
+      }
+    }
+  }
+
+  private updateOrderStatus(order: OrderDto, statusId: OrderStatus) {
+    this.managerClient.emit(Events.ORDER_STATUS_CHANGED, {
+      ...order,
+      statusId,
+    });
   }
 
   async buyIngredient(ingredient: string): Promise<number> {

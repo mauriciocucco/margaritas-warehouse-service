@@ -1,7 +1,6 @@
-import { Entity, Column, PrimaryGeneratedColumn, Check } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
 
 @Entity('inventory')
-@Check(`"quantity" >= 0`)
 export class InventoryEntity {
   @PrimaryGeneratedColumn()
   id: string;

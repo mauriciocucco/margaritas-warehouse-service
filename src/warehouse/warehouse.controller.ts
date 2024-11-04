@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { WarehouseService } from './warehouse.service';
 import {
   Ctx,
@@ -7,6 +7,8 @@ import {
   RmqContext,
 } from '@nestjs/microservices';
 import { ApiGatewayGuard } from '../common/guards/api-gateway.guard';
+import { OrderDto } from './dtos/order.dto';
+import { GetPurchaseHistoryDto } from './dtos/get-purchase-history.dto';
 
 @UseGuards(ApiGatewayGuard)
 @Controller()
@@ -19,25 +21,25 @@ export class WarehouseController {
   }
 
   @Get('purchase-history')
-  async getPurchaseHistory() {
-    return await this.warehouseService.getPurchaseHistory();
-  }
-
-  @MessagePattern('reduce_ingredients')
-  async handleOrderDispatched(
-    @Payload() ingredients: { [ingredientName: string]: number },
-    @Ctx() context: RmqContext,
+  async getPurchaseHistory(
+    @Query() getPurchaseHistoryDto?: GetPurchaseHistoryDto,
   ) {
-    return await this.warehouseService.reduceIngredients(ingredients, context);
+    return await this.warehouseService.getPurchaseHistory(
+      getPurchaseHistoryDto,
+    );
   }
 
   @MessagePattern('request_ingredients')
   async handleRequestIngredients(
-    @Payload() ingredientsRequested: { [key: string]: number },
+    @Payload()
+    ingredientsRequest: {
+      ingredients: { [key: string]: number };
+      order: OrderDto;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.warehouseService.handleRequestIngredients(
-      ingredientsRequested,
+      ingredientsRequest,
       context,
     );
   }
