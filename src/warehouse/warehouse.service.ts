@@ -7,7 +7,6 @@ import { firstValueFrom } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { PurchaseHistory } from './entities/purchase-history.entity';
-import { OrderDto } from './dtos/order.dto';
 import { OrderStatus } from './enums/order-status.enum';
 import { GetPurchaseHistoryDto } from './dtos/get-purchase-history.dto';
 import { Events } from './enums/events.enum';
@@ -81,12 +80,16 @@ export class WarehouseService {
 
   async handleRequestIngredients(
     ingredientsRequest: {
-      ingredients: { [key: string]: number };
-      order: OrderDto;
+      ingredients: {
+        [key: string]: number;
+      };
+      orders: {
+        id: number;
+      }[];
     },
     context: RmqContext,
   ) {
-    const { ingredients, order } = ingredientsRequest;
+    const { ingredients, orders } = ingredientsRequest;
     const channel = context.getChannelRef();
     const originalMsg = context.getMessage();
 
@@ -105,12 +108,12 @@ export class WarehouseService {
       if (missingIngredients.length > 0) {
         console.log('Missing ingredients:', missingIngredients);
 
-        this.updateOrderStatus(order, OrderStatus.PAUSED);
+        this.updateOrderStatus(orders, OrderStatus.PAUSED);
 
         await this.purchaseMissingIngredients(missingIngredients);
       }
 
-      this.updateOrderStatus(order, OrderStatus.IN_PROGRESS);
+      this.updateOrderStatus(orders, OrderStatus.IN_PROGRESS);
 
       channel.ack(originalMsg);
 
@@ -162,7 +165,7 @@ export class WarehouseService {
               `Ingredient ${ingredient} not available at the market. Waiting...`,
             );
 
-            await this.delay(5000);
+            await this.delay(500);
           }
         } catch (error) {
           console.error(`Error purchasing ${ingredient}:`, error.message);
@@ -179,11 +182,18 @@ export class WarehouseService {
     }
   }
 
-  private updateOrderStatus(order: OrderDto, statusId: OrderStatus) {
-    this.managerClient.emit(Events.ORDER_STATUS_CHANGED, {
+  private updateOrderStatus(
+    orders: {
+      id: number;
+    }[],
+    statusId: OrderStatus,
+  ) {
+    const updatedOrders = orders.map((order) => ({
       ...order,
       statusId,
-    });
+    }));
+
+    this.managerClient.emit(Events.ORDER_STATUS_CHANGED, updatedOrders);
   }
 
   async buyIngredient(ingredient: string): Promise<number> {

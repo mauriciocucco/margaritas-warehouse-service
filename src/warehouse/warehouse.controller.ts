@@ -7,7 +7,6 @@ import {
   RmqContext,
 } from '@nestjs/microservices';
 import { ApiGatewayGuard } from '../common/guards/api-gateway.guard';
-import { OrderDto } from './dtos/order.dto';
 import { GetPurchaseHistoryDto } from './dtos/get-purchase-history.dto';
 
 @UseGuards(ApiGatewayGuard)
@@ -33,8 +32,12 @@ export class WarehouseController {
   async handleRequestIngredients(
     @Payload()
     ingredientsRequest: {
-      ingredients: { [key: string]: number };
-      order: OrderDto;
+      ingredients: {
+        [key: string]: number;
+      };
+      orders: {
+        id: number;
+      }[];
     },
     @Ctx() context: RmqContext,
   ) {
