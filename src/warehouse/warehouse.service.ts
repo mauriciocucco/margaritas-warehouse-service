@@ -174,6 +174,21 @@ export class WarehouseService {
         }
       }
 
+      await this.purchaseHistoryRepository
+        .createQueryBuilder()
+        .insert()
+        .into('purchase_history')
+        .values({
+          ingredient,
+          quantity: totalPurchased,
+          date: new Date(),
+        })
+        .execute();
+
+      console.log(
+        `Registered purchase: ${ingredient} - ${totalPurchased} units.`,
+      );
+
       const extraQuantity = totalPurchased - quantityNeeded;
 
       if (extraQuantity > 0) {
@@ -239,23 +254,6 @@ export class WarehouseService {
         .set({ quantity: () => `quantity + ${quantityChange}` })
         .where('name = :name', { name: ingredient })
         .execute();
-
-      if (quantityChange > 0) {
-        await this.purchaseHistoryRepository
-          .createQueryBuilder()
-          .insert()
-          .into('purchase_history')
-          .values({
-            ingredient,
-            quantity: quantityChange,
-            date: new Date(),
-          })
-          .execute();
-
-        console.log(
-          `Registered purchase: ${ingredient} - ${quantityChange} units.`,
-        );
-      }
 
       console.log(
         `Updated inventory: ${ingredient} - ${quantityChange} units.`,
