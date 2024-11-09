@@ -108,12 +108,12 @@ export class WarehouseService {
       if (missingIngredients.length > 0) {
         console.log('Missing ingredients:', missingIngredients);
 
-        this.updateOrderStatus(orders, OrderStatus.PAUSED);
+        await this.updateOrderStatus(orders, OrderStatus.PAUSED);
 
         await this.purchaseMissingIngredients(missingIngredients);
-      }
 
-      this.updateOrderStatus(orders, OrderStatus.IN_PROGRESS);
+        await this.updateOrderStatus(orders, OrderStatus.IN_PROGRESS);
+      }
 
       channel.ack(originalMsg);
 
@@ -122,7 +122,8 @@ export class WarehouseService {
       console.error('Error processing ingredient request:', error.message);
 
       channel.nack(originalMsg);
-      throw error;
+
+      return { success: false };
     }
   }
 
@@ -197,18 +198,26 @@ export class WarehouseService {
     }
   }
 
-  private updateOrderStatus(
+  private async updateOrderStatus(
     orders: {
       id: number;
     }[],
     statusId: OrderStatus,
   ) {
-    const updatedOrders = orders.map((order) => ({
-      ...order,
-      statusId,
-    }));
+    try {
+      const updatedOrders = orders.map((order) => ({
+        ...order,
+        statusId,
+      }));
 
-    this.managerClient.emit(Events.ORDER_STATUS_CHANGED, updatedOrders);
+      return await firstValueFrom(
+        this.managerClient.emit(Events.ORDER_STATUS_CHANGED, updatedOrders),
+      );
+    } catch (error) {
+      console.error('Failed to update order status:', error.message);
+
+      throw error;
+    }
   }
 
   async buyIngredient(ingredient: string): Promise<number> {
