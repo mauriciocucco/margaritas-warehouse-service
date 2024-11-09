@@ -24,6 +24,9 @@ const typeORMOptions: () => TypeOrmModuleOptions = () => ({
     migrationsDir: 'src/migrations',
   },
   logging: ['query'],
+  // ssl: {
+  //   rejectUnauthorized: false,
+  // },
 });
 
 export default typeORMOptions;

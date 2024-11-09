@@ -23,8 +23,7 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
           options: {
             urls: [configService.get<string>('RABBITMQ_URL')],
             queue: 'manager_queue',
-            queueOptions: { durable: true },
-            prefetchCount: 1,
+            queueOptions: { durable: false },
           },
         }),
       },
